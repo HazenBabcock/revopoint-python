@@ -1,7 +1,8 @@
 ## revoscan-python ##
 ![depth image](images/image.png?raw=true "")
 
-A python module for interfacing with a Revopoint scanner.
+A python module for interfacing with a Revopoint scanner. It should work on any OS
+as all communcation with the scanner happens via HTTP.
 
 The scanner should be powered on and connected to WIFI. In general it is easier to
 configure the scanner to join your WIFI network instead of being it's own network.
