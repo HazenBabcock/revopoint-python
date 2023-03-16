@@ -1,5 +1,5 @@
 ## revoscan-python ##
-![depth image](relative%20path/images/image.png?raw=true "")
+![depth image](images/image.png?raw=true "")
 
 A python module for interfacing with a Revopoint scanner.
 
