@@ -30,6 +30,26 @@ class Revopoint(object):
             return None
         return r
 
+    def config_MINI(self):
+        """
+        Configure MINI to scan as expected? These may different for a different scanner?
+
+        If you don't send these commands the scan appears to be slower and have a higher 
+        gain. Not really sure what these commands might actually be doing.
+        """
+        # 'system_cmd=echo s 0x904 0 > /dev/rk_preisp'
+        # This has something to do with accuracy? Values seem to be 0 or 1.
+        self.check_response(requests.get(f"{self._zx_cmd()}system_cmd=echo%20s%200x904%200%20>%20/dev/rk_preisp"))
+
+        # 'system_cmd=echo s 0x702 640 400 > /dev/rk_preisp'
+        # This sets the depth camera XY resolution? If you don't send this command you still get a 640x400 depth image
+        # so not that clear.
+        self.check_response(requests.get(f"{self._zx_cmd()}system_cmd=echo%20s%200x702%20640%20400%20>%20/dev/rk_preisp"))
+
+        # 'system_cmd=echo s 0x707 90 280 >/dev/rk_preisp'
+        # This sets the scanner pattern? Camera frame rate? I couldn't find any info about this one.
+        self.check_response(requests.get(f"{self._zx_cmd()}system_cmd=echo%20s%200x707%2090%20280%20>/dev/rk_preisp"))
+
     def get_depth_resolution(self):
         """
         Returns the current resolution, not sure what this means or if it can be changed.
@@ -48,7 +68,10 @@ class Revopoint(object):
         Possible TODO: If you instead start acquriring with 'http://192.168.1.14/cgi-bin/zx_media.cgi?camera_id=21' 
                        you will get an LZ? compressed data stream. This might improve the bandwidth?
         """
-        npix = 640*400
+        # This might be scanner dependent?
+        sizeX = 640
+        sizeY = 400
+        npix = sizeX*sizeY
         
         # I only think this sequence of commands is necessary to start acquisition.
 
@@ -56,7 +79,10 @@ class Revopoint(object):
         tmp = "cam_type=mipi&set_display_reso=1&&set_display_width=640&&set_display_height=400&&set_display_type=4"
         self.check_response(requests.get(f"{self._zx_cmd()}{tmp}")),
 
-        # Tell it run untriggered? Interesting that there might be a trigger? Software trigger?
+        # Tell the scanner to return the pictures from the two depth cameras as well.
+        self.check_response(requests.get(f"{self._zx_cmd()}cam_type=mipi&set_depth_output_fmt=3"))
+        
+        # Tell the scanner to run untriggered? Interesting that there might be a trigger? Software trigger?
         self.check_response(requests.get(f"{self._zx_cmd()}cam_type=mipi&set_trigger_mode=0"))
 
         # This actually starts the camera. You get the camera data back as a stream of bytes. It stops
@@ -70,15 +96,15 @@ class Revopoint(object):
                 if (len(resp) > nBytes):
                     break
             
-        # Split resp byte stream into depth images.
+        # Split resp byte stream into depth and 'other' images.
         images = {"depth" : [],
                   "other" : []}
 
         o = 0
         sCode = [3,7,2,1]
-        while (o < (len(resp)-4)):
+        while (o < (len(resp)-(npix*4+4))):
             
-            # Find start of next frame, this is the pattern '3,7,2,1'
+            # Find start of next frame, this is the pattern '3,7,2,1'.
             found = True
             for i in range(4):
                 if (int(resp[o+i]) != sCode[i]):
@@ -90,11 +116,19 @@ class Revopoint(object):
                 continue
             
             o += 4
-            im1 = np.frombuffer(resp, dtype = np.uint16, count = npix, offset = o).reshape((400,640))
-            im2 = np.frombuffer(resp, dtype = np.uint8, count = 2*npix, offset = o + 2*npix).reshape((400,2*640))
+
+            # Depth images are 16 bit unsigned integer corresponding to depth. Low values and/or dropouts
+            # presumably mean that there was no reading for this pixel.
+            im1 = np.frombuffer(resp, dtype = np.uint16, count = npix, offset = o).reshape((sizeY,sizeX))
             images["depth"].append(im1)
+            
+            # I think these are the images from the two depth sensor cameras. They are 8 bit grey scale.
+            im2 = np.frombuffer(resp, dtype = np.uint8, count = 2*npix, offset = o + 2*npix).reshape((2*sizeY,sizeX))
             images["other"].append(im2)
-            o += 4*npix-10   # Not sure why I need to wind this back slightly here.
+
+            # Update offset in the byte stream.
+            o += 4*npix
+            o -= 4       # Not sure why I need to wind this back slightly here.
 
             if (len(images["depth"]) == nImages):
                 break
@@ -138,7 +172,8 @@ if(__name__ == "__main__"):
     rp.close_streams()
     print(rp.get_version())
     print(rp.get_depth_resolution())
-    rp.set_depth_gain(5)
+    rp.config_MINI()
+    rp.set_depth_gain(1)
 
     nm = 2
     images = rp.get_images(nm)
