@@ -30,6 +30,11 @@ rp.set_depth_gain(1)
 images = rp.get_images(2)
 ```
 
+## Known Issues ##
+
+* The scan rate is well below 10Hz.
+* The images from the color USB camera are not available.
+
 ## Dependencies ##
 
 * [numpy](https://www.numpy.org/)
