@@ -12,7 +12,7 @@ The code has been tested with Python3.10 and Revopoint MINI scanner running v7.6
 
 ## Sample Usage ##
 ```
-import revopoint_python as rppy
+import revopoint_python.revopoint as rppy
 
 rp = rppy.Revopoint(ipAddr = "192.168.1.14")
 
