@@ -13,17 +13,34 @@ desk (a high-dynamic-range target: bright object, dark background).
   already; the host (Revo Scan) does registration, fusion and meshing. *(For the
   POP3, the PC app reportedly requests the raw PAIR and computes depth on the
   host instead — unverified for the MINI, which clearly streams on-device depth.)*
-- **Projector pattern = a fixed vertical fringe.** With exposure low enough not
-  to wash it out, both cameras show a crisp vertical fringe across the object.
-- **Single-shot, not phase-shifting.** Cross-correlating the fringe between
-  consecutive frames gave **0 px shift** every time — the pattern is static.
-  So depth is single-shot fringe-assisted stereo, not multi-frame phase shift.
-  (The SDK exposes a fringe-pattern selector that *includes* 3-frequency
-  4-step phase shifting, but that is not what the MINI does in this mode.)
+- **Projector = multiple structured-light patterns.** Watching the projector
+  during a scan (by eye) shows it cycling through a *series of stripe patterns
+  with different periods* — multi-pattern structured light, the fingerprint of a
+  multi-frequency / phase-shift method, not a single static fringe. The single
+  crisp vertical fringe seen in a *stream* mono frame is one sampled instant, not
+  the whole projection (see "What the stream shows" below).
 - **The projector is always on while streaming.** The POP3 `0xb00`/`0xb01`
   "LED/projector enable" registers are inert here (see
   [rk-preisp-registers.md](rk-preisp-registers.md)); depth appears with or
   without poking them.
+
+## What the stream shows about the pattern (and what it can't)
+
+The raw stream is **not** a window onto the projection. Per computed depth frame
+it carries the finished on-device depth map plus a single mono image from each
+camera; the scanner runs its whole multi-pattern sequence internally and emits
+only the result. So consecutive stream frames can't be used to count or time the
+projected patterns — an earlier "0 px fringe shift between stream frames" reading
+measured the *output* cadence, not the projector, and wrongly looked like a
+static single-shot pattern.
+
+The depth engine reports its capability flags (exported to `/tmp/algo.ini`),
+which on this unit read `change_pattern = 1` and `auto_expoosure = 1` *[sic]*.
+`change_pattern` is a **boolean capability flag** — it says pattern changing is
+*supported*, **not** how many patterns there are or whether they form a
+phase-shift sequence. The exact pattern count on this MINI is **unverified**; the
+cleanest way to get it is high-speed video of the projector during a scan (e.g.
+240 fps phone slow-motion), since the patterns never appear in the stream.
 
 ## Exposure is the real quality lever
 
