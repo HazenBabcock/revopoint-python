@@ -35,12 +35,23 @@ Mode names reported over the HTTP API (`get_depth_reso`) line up with these:
 
 ## Color function → `/dev/video4` (`RGBCamA22C...`)
 
-- `MJPG` 1280x800 @ 30/20/15/10 fps. Clean color frames captured with nothing
-  but `v4l2-ctl` / ffmpeg.
-- **The color camera is USB-only.** It is *not* exposed anywhere on the
-  WiFi/HTTP interface (which only carries the `mipi` depth path). This is why an
-  HTTP-only client can never get color — a fully textured capture needs the
-  scanner plugged in over USB for color *and* on WiFi (or USB) for depth.
+- `MJPG` 1280x800 @ 30/20/15/10 fps (the only format). `/dev/video5` is the
+  same function's metadata node and has no capture formats.
+- **It only streams while the depth engine is running.** On a cold scanner, even
+  right after a power cycle, `v4l2-ctl` opens the node but gets **0 frames** and
+  times out. With an HTTP depth stream active (`zx_media.cgi?camera_id=22`,
+  projector on), clean frames arrive immediately. The camera subsystem is only
+  powered while a depth stream runs. `Revopoint.get_color_image()` handles this
+  by starting a short depth stream, grabbing the color frames, and always
+  tearing the stream down.
+- **The color frames come over USB only.** Color is *not* exposed anywhere on the
+  WiFi/HTTP interface (which only carries the `mipi` depth path), so an
+  HTTP-only client can never get color. Because of the engine dependency above,
+  color capture needs the scanner plugged in over USB (for the frames) *and*
+  reachable over WiFi (to run the engine).
+- The projector is lit during a color capture. At the color camera's auto
+  exposure the fringe is largely averaged out, but it is not a projector-off
+  texture image.
 
 ## Controls are locked behind a vendor extension unit
 
@@ -55,12 +66,14 @@ Mode names reported over the HTTP API (`get_depth_reso`) line up with these:
   0x0400` with selectors for file read/write and device configuration; the
   vendor DLL also tunnels HID through it. The two projects disagree on some
   selector meanings. None of this was exercised here.
-- **Practical consequence:** over USB you can freely grab both mono cameras, the
-  color camera, and the sparse on-device depth, but you cannot drive exposure or
-  the projector without reverse-engineering the extension unit. The **HTTP path
-  is the easier control plane** (see [http-api.md](http-api.md) and
-  [rk-preisp-registers.md](rk-preisp-registers.md)); USB is the easier way to get
-  **color** and possibly higher-rate depth if the engine is already running.
+- **Practical consequence:** over USB you can grab both mono cameras, the color
+  camera (while the engine runs, see above), and the sparse on-device depth, but
+  you cannot drive exposure or the projector without reverse-engineering the
+  extension unit. The **HTTP path is the easier control plane** (see
+  [http-api.md](http-api.md) and
+  [rk-preisp-registers.md](rk-preisp-registers.md)). USB is the only way to get
+  **color**, and possibly higher-rate depth, in both cases with the engine
+  started over HTTP.
 
 ## HID interface
 
