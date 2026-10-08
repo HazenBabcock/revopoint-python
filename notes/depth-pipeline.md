@@ -42,6 +42,42 @@ phase-shift sequence. The exact pattern count on this MINI is **unverified**; th
 cleanest way to get it is high-speed video of the projector during a scan (e.g.
 240 fps phone slow-motion), since the patterns never appear in the stream.
 
+## Projector mechanism (inferred)
+
+The projector is a **scanned blue-laser** source with a single resonant axis —
+not a 2-D image modulator (no DMD/LCoS). Evidence:
+
+- The firmware stores a **resonant-frequency** parameter of ~3.45 kHz (raw value
+  3451). A resonant frequency only makes sense for a mechanically oscillating
+  element — a scanning mirror or a piezo; a framebuffer-style projector would
+  have no such number. ~3.45 kHz is far faster than the per-pattern exposure
+  (~ms), consistent with the element sweeping many times per captured frame to
+  build up each pattern.
+- Only **one** resonant frequency is stored → one oscillating (horizontal) axis.
+- Physical + economic bounds point the same way: the projector is physically
+  tiny (~1–2 cm on a side) and the scanner is inexpensive. That rules out a
+  bulky, costly DMD/LCoS and favors the simplest programmable option — a single
+  small resonant mirror sweeping a laser line (fanned vertically by a cylindrical
+  lens or DOE), with the laser intensity-modulated during the sweep to synthesize
+  fringes.
+
+**Capability this implies:**
+
+- *Along the horizontal (scan) axis:* arbitrary 1-D profiles — stripe patterns of
+  any period, phase-shifted, sinusoidal or binary/Gray-coded. This is exactly the
+  toolkit for a multi-frequency phase-shift scheme, and why the projector can
+  show "stripes of different periods."
+- *Vertically / true 2-D:* effectively none. With one controllable axis it cannot
+  project horizontal stripes, checkerboards, dot grids, or arbitrary images — the
+  vertical direction is just a laser line.
+
+**Confidence:** high that it is a 1-D scanned-laser projector (single resonant
+axis + only-ever-vertical fringes + small/cheap hardware all agree). The exact
+element (resonant MEMS mirror vs piezo-shifted grating) is **not** determined
+from the outside. A hidden *slow* second axis (e.g. a DC galvo, which would not
+be stored as a "resonant" frequency) cannot be ruled out in principle, but
+nothing points to one, so genuine 2-D projection is very unlikely.
+
 ## Exposure is the real quality lever
 
 Exposure sweep (`0x911`, gain 1, measuring mono saturation and depth
