@@ -52,10 +52,16 @@ The stream runs until the connection is dropped. `close_stream_all` cleans up a
 session that was left open.
 
 - `camera_id=22` — **raw** stream (used here).
-- `camera_id=21` — **compressed** stream *(from other scanners: QuickLZ, magic
-  `0x11223344` + length + payload, ~235 KB/frame vs ~1 MB raw, ~21 fps on a
-  POP3)*. Not yet tried on the MINI; this is the likely fix for the "< 10 Hz"
-  problem, which is WiFi-bandwidth-bound at ~1 MB/frame raw.
+- `camera_id=21` — **compressed** stream. **Confirmed working on the MINI**:
+  framing is magic `0x11223344` (on the wire little-endian: `44 33 22 11`) +
+  4-byte little-endian payload length + QuickLZ payload, **~349 KB/frame**
+  (~2.9× smaller than raw). *(POP3: ~235 KB/frame, ~21 fps.)* **It does NOT raise
+  the MINI's frame rate** — raw and compressed both deliver ~4.2 fps; the depth
+  rate is acquisition-limited, not WiFi-bandwidth-limited (see
+  [depth-pipeline.md](depth-pipeline.md), "Frame rate is capped at ~4 fps").
+  Compression still cuts the link load ~3× (useful at higher resolution, on a
+  weaker link, or with multiple clients), and *would* be needed to deliver
+  >~4.4 fps if acquisition were ever sped up, since raw saturates the link there.
 
 ### Raw frame layout (`camera_id=22`, `set_depth_output_fmt=3`, 640x400)
 

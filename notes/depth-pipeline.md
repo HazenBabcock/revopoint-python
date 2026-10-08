@@ -37,10 +37,32 @@ static single-shot pattern.
 The depth engine reports its capability flags (exported to `/tmp/algo.ini`),
 which on this unit read `change_pattern = 1` and `auto_expoosure = 1` *[sic]*.
 `change_pattern` is a **boolean capability flag** — it says pattern changing is
-*supported*, **not** how many patterns there are or whether they form a
-phase-shift sequence. The exact pattern count on this MINI is **unverified**; the
-cleanest way to get it is high-speed video of the projector during a scan (e.g.
-240 fps phone slow-motion), since the patterns never appear in the stream.
+*supported*, **not** how many patterns there are. The count was measured directly
+with an external high-speed camera (next section), since the patterns never
+appear in the stream.
+
+## Pattern count, measured externally: 12 = 3 frequencies × 4 phases
+
+A Basler acA1440-220uc (color, 901 fps) was aimed at the projected fringe on a
+flat white target while an HTTP depth stream kept the projector running, to catch
+the sequence the stream hides. 1800 frames at 901 fps gave ~18 camera frames per
+projected pattern (heavily oversampled). From the fringe profiles:
+
+- **3 spatial frequencies** — periods roughly 20, 81 and 360 px *as imaged by the
+  external camera* (relative, not projector line counts; spacing ≈ ×4).
+- **4 phase steps per frequency**, evenly spaced **90°**, confirmed at all three
+  frequencies (each frequency's fringe phase clusters cleanly into 4 groups).
+- → **12 patterns = 3 frequencies × 4 phases**, exactly matching the SDK's
+  "3-frequency 4-step phase shift".
+- Projected **sequentially** (95% of frames show one dominant frequency),
+  ~20 ms per pattern, in the order fine → mid → fine → coarse (the fine set
+  appears re-shot before the coarse one). The *order* is held loosely — the camera
+  was unsynchronized so the sequence drifts slightly between cycles — but the
+  **count (12)** and the **90° phase quantization** are unambiguous.
+
+Textbook multi-frequency 4-step phase-shifting, confirmed from outside the
+device. This supersedes the earlier "single-shot" guess and the earlier
+"count unverified".
 
 ## Projector mechanism (inferred)
 
@@ -114,6 +136,50 @@ at a low base exposure, two of the states fall below the depth threshold. At
 exposure ≥12000 all four states yield depth. Any consumer of the raw stream
 should expect this interleave and select/fuse accordingly rather than trusting
 every Nth frame.
+
+## Frame rate is capped at ~4 fps (acquisition-limited, not bandwidth)
+
+Over the WiFi/HTTP interface the delivered depth rate is **~4.2 fps**, and three
+measurements show the limit is **pattern acquisition**, not the link or exposure:
+
+- **Compression doesn't help.** Raw (`camera_id=22`, ~1024 KB/frame) and the
+  QuickLZ-compressed stream (`camera_id=21`, ~349 KB/frame, 2.9× smaller) both
+  deliver **~4.25 fps** — raw at ~35 Mbit/s, compressed at ~12 Mbit/s. Cutting the
+  data 2.9× moved the rate <1%, so WiFi bandwidth is **not** the limiter. (This
+  corrects the earlier claim in [http-api.md](http-api.md) that compression was
+  "the likely fix for the < 10 Hz problem".)
+- **Exposure doesn't help.** Sweeping `0x911` from 800 µs to 12 ms leaves the rate
+  flat at ~4.2 fps; it only drops once exposure exceeds ~20 ms:
+
+  | exposure | raw fps | comp fps | depth valid | mono mean |
+  |---:|---:|---:|---:|---:|
+  | 800 µs | 4.19 | 4.21 | 0.21 | 16 |
+  | 1500 µs | 4.21 | 4.21 | 0.71 | 27 |
+  | 3000 µs | 4.20 | 4.19 | 0.82 | 61 |
+  | 6000 µs | 4.30 | 3.97 | 0.82 | 118 |
+  | 12000 µs | 4.20 | 4.21 | 0.82 | 217 |
+  | 24000 µs | 3.44 | 3.44 | 0.82 | 233 |
+
+- **The limiter is a ~20 ms/pattern fixed overhead.** 12 patterns × ~20 ms ≈
+  240 ms ≈ 4.2 fps, matching the external-camera dwell. Per-pattern time behaves
+  like `max(~20 ms overhead, exposure)` — exposure only bites once it exceeds the
+  overhead (hence the 24 ms drop). The overhead is not exposure and not streaming
+  (the projector itself dwells ~20 ms/pattern); likely fixed pattern-sequencing /
+  on-chip compute pacing.
+
+Consequences:
+
+- **10 fps is not reachable** over this interface by compression or exposure. The
+  spec'd 10 fps presumably uses a different mode (USB, or fewer patterns).
+- Depth coverage plateaus at exposure ≥ 3 ms (~0.82 valid) — *inside* the
+  overhead-limited regime — so best quality and max rate coincide at ~3–12 ms;
+  there is no speed-for-quality trade via exposure here.
+- The one untested lever that could reach ~10 fps is **fewer patterns** (via the
+  `change_pattern` capability): e.g. 1 frequency × 4 phases = 4 patterns →
+  ~80 ms → ~12 fps, trading multi-frequency unwrapping robustness for speed.
+- Even if acquisition were sped up, **raw** streaming saturates the link
+  (~35 Mbit/s ≈ ~4.4 fps at ~1 MB/frame), so delivering >~4.4 fps would then
+  require the compressed stream after all.
 
 ## Metric scale is unresolved
 
