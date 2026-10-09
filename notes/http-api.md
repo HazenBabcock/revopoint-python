@@ -1,7 +1,7 @@
 # HTTP / WiFi control plane
 
 The scanner joins WiFi (client mode) and runs **lighttpd/1.4.48** on port 80. All
-control and depth streaming goes through two CGIs. This is the interface the
+control, depth and color streaming goes through two CGIs. This is the interface the
 `revopoint_python` module uses.
 
 - Command endpoint: `http://<ip>/cgi-bin/zx_cmd.cgi?<query>`
@@ -85,9 +85,46 @@ immediately after. (This is what `revopoint.get_images` does; the small
 > capture states (see [depth-pipeline.md](depth-pipeline.md)); consecutive
 > frames are not all equivalent.
 
+## Color stream
+
+The color camera is served by `zx_media.cgi` too. These are the `camera_id`
+values the CGI accepts (read from its dispatch code):
+
+| `camera_id` | Stream |
+|---|---|
+| 21 | compressed depth (above) |
+| 22 | raw depth (above) |
+| 32 | depth, a second mode of the same handler as 22 (not tried) |
+| 50 | **color, MJPEG** |
+| 60 | color, single JPEG snapshot |
+| 80 | color, H.264 |
+
+Verified on the MINI:
+
+- `camera_id=50`: 1280x800 JPEG frames, ~4.4 fps, ~30-50 KB/frame. The framing
+  is the same as the compressed depth stream: magic `0x11223344` (little-endian)
+  + little-endian uint32 length + payload. The payload is a JPEG followed by a few
+  bytes of padding after the `FF D9` end marker. The response headers only arrive
+  with the first frame.
+- It works with the USB cable unplugged (WiFi only), but **only while a depth
+  stream (`camera_id=22`) is running**, as over USB. With no depth stream the
+  request gets no frames at all, so the projector is on during color capture.
+- A new color stream can start with a stale header left over from an earlier
+  stream, with no payload behind it. Only accept a header if `FF D8` follows it,
+  otherwise search for the next magic.
+- After power up the color auto-exposure starts dark and takes ~5 s (~20 frames)
+  to settle. It then holds across streams until the next power cycle.
+- Opening a new color stream ends an older one, and `close_stream_all` ends it.
+- `camera_id=60` returned `Content-Type: image/jpeg` with an empty body every
+  time, with or without the depth and color streams running.
+- `camera_id=80`: H.264 Main profile, 1280x800, ~4.5 fps, with the same framing
+  (SPS/PPS + IDR first, then ~4 KB P-frames). It decodes with ffmpeg, but the low
+  bitrate leaves visible block artifacts, so `camera_id=50` is better for stills.
+- The depth and color streams run at the same time, and depth coverage was the
+  same as with depth alone, so the two can be captured together
+  (`Revopoint.get_images(color = True)`).
+
 ## HTTP server behavior (incidental)
 
 - `GET /` → 403; unknown paths → 404; `OPTIONS /` → `Allow: OPTIONS, GET, HEAD, POST`.
 - `zx_cmd.cgi` / `zx_media.cgi` with no query → HTTP 500.
-- The color (RGB) camera is **not** reachable over HTTP — it is USB-only. See
-  [usb-interface.md](usb-interface.md).

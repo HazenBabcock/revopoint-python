@@ -6,6 +6,9 @@ Interface with a Revopoint scanner via WIFI.
 import glob
 import json
 import os
+import struct
+import threading
+import time
 
 import numpy as np
 import requests
@@ -53,86 +56,71 @@ class Revopoint(object):
         # This sets the scanner pattern? Camera frame rate? I couldn't find any info about this one.
         self.check_response(requests.get(f"{self._zx_cmd()}system_cmd=echo%20s%200x707%2090%20280%20>/dev/rk_preisp"))
 
-    def get_color_image(self, n = 1, device = None, raw_jpeg = False, manage_engine = True):
+    def get_color_image(self, n = 1, device = None, raw_jpeg = False, manage_engine = True, usb = False, settle = True):
         """
-        Capture n frames from the USB color (RGB) camera.
+        Capture n frames from the color (RGB) camera.
 
-        The color camera streams over USB, but only while the scanner's depth
-        engine is running -- the shared camera subsystem is unpowered otherwise.
-        So this needs BOTH the USB connection (for the frames) and the WiFi/HTTP
-        connection (to run the engine), and it briefly runs the projector.
+        By default the frames come over WiFi/HTTP (an MJPEG stream from
+        zx_media.cgi, camera_id=50), so no USB connection is needed. Pass
+        usb = True to read the same camera as a USB webcam instead (Linux only,
+        V4L2 through OpenCV).
 
-        With manage_engine = True (default) a short depth stream is started to
-        power the camera (projector on), the color frame(s) are grabbed, and the
-        stream is always torn down afterwards. Pass manage_engine = False if you
-        already have a depth stream running (e.g. grabbing depth and color
-        together), in which case only the USB connection is used here.
+        Either way the color camera only delivers frames while the scanner's
+        depth engine is running. With manage_engine = True (default) a short
+        depth stream is started (projector on), the color frame(s) are grabbed,
+        and the stream is always torn down afterwards. Pass manage_engine = False
+        if you already have a depth stream running.
 
         The color camera's exposure/white balance are locked to auto by the
         vendor, so these are auto-exposed frames (and the projector is lit during
         the capture, though its fringe is largely averaged out by the exposure).
+        After the scanner powers up the auto-exposure starts dark and takes ~5
+        seconds to settle, it then holds until the next power cycle.
 
-        Requires OpenCV (imported here, not needed for the WiFi-only features).
-
-        device        : V4L2 device path, e.g. '/dev/video4'. If None the color
-                        node is auto-detected by name ('RGBCam*').
-        raw_jpeg      : if True return the undecoded MJPEG bytes per frame (handy
+        device        : (usb only) V4L2 device path, e.g. '/dev/video4'. If None
+                        the color node is auto-detected by name ('RGBCam*').
+        raw_jpeg      : if True return the undecoded JPEG bytes per frame (handy
                         to save '.jpg' with no re-encode); else decoded RGB arrays.
         manage_engine : start/stop a depth stream to power the camera (default),
                         or assume one is already running.
+        usb           : read the frames over USB instead of WiFi.
+        settle        : True (default) discards frames until the auto-exposure
+                        has settled (at most 10 seconds), an integer discards that
+                        many frames, False keeps the first frames.
+
+        Decoding the frames, settle = True and usb = True all need OpenCV. With
+        raw_jpeg = True and settle = False (or an integer) the WiFi path doesn't.
 
         Returns a list of length n.
         """
-        import threading
-        import time
+        if (self.ipAddr is None) and (manage_engine or not usb):
+            raise RuntimeError("This needs the scanner's WiFi ipAddr; for USB without it, "
+                               "run a depth stream yourself and pass manage_engine = False")
 
-        import cv2
-
-        if device is None:
+        if usb and (device is None):
             device = self._find_color_device()
 
         stopEngine = None
         engineThread = None
         try:
             if manage_engine:
-                if self.ipAddr is None:
-                    raise RuntimeError("manage_engine needs the scanner's WiFi ipAddr; set it, or "
-                                       "run a depth stream yourself and pass manage_engine = False")
                 stopEngine = threading.Event()
                 engineThread = threading.Thread(target = self._run_engine, args = (stopEngine,), daemon = True)
                 engineThread.start()
-                time.sleep(1.5)       # let the camera subsystem power up
+                time.sleep(1.5)       # let the engine and the camera start
 
-            cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
-            if not cap.isOpened():
-                raise RuntimeError(f"Could not open color camera {device}")
+            if usb:
+                jpegs = self._iter_color_usb(device)
+            else:
+                jpegs = self._iter_color_http()
             try:
-                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 800)
-
-                # With CONVERT_RGB off the V4L2 backend hands back the raw MJPEG
-                # buffer instead of a decoded BGR image.
-                if raw_jpeg:
-                    cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-
-                frames = []
-                for _ in range(n):
-                    (ok, frame) = cap.read()
-                    if not ok:
-                        raise RuntimeError(f"Failed to read a frame from {device} "
-                                           "(is the depth engine running?)")
-                    if raw_jpeg:
-                        # The mmap buffer is larger than the JPEG, so trim the
-                        # trailing padding back to the end-of-image marker.
-                        raw = frame.tobytes()
-                        end = raw.rfind(b"\xff\xd9")
-                        frames.append(raw[:end + 2] if end != -1 else raw)
-                    else:
-                        frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                return frames
+                frames = self._take_color(jpegs, n, settle)
             finally:
-                cap.release()
+                jpegs.close()
+
+            if raw_jpeg:
+                return frames
+            return [self._decode_jpeg(f) for f in frames]
         finally:
             # Always tear the stream down -- a stream left open keeps the
             # projector/engine running.
@@ -154,15 +142,23 @@ class Revopoint(object):
         if r is not None:
             return json.loads(r.content.decode('utf-8').replace("}{", ","))
 
-    def get_images(self, nImages):
+    def get_images(self, nImages, color = False, settle = True):
         """
         Returns nImages from the scanner. This will lock until complete, so maybe keep
         nImages on the small side.
 
+        color  : if True also capture the color camera (over WiFi) at the same
+                 time, the frames are returned as RGB arrays under "color".
+                 This needs OpenCV.
+        settle : as for get_color_image(). The depth stream is kept running
+                 until the color auto-exposure has settled, and the depth images
+                 returned are the most recent ones, so depth and color are from
+                 the same time.
+
         Note: This assumes that images are 640x400x4 bytes.
 
-        Possible TODO: If you instead start acquriring with 'http://192.168.1.14/cgi-bin/zx_media.cgi?camera_id=21'
-                       you will get an LZ? compressed data stream. This might improve the bandwidth?
+        Note: The compressed stream ('camera_id=21') does not raise the frame
+              rate, it is limited by the projector, see notes/depth-pipeline.md.
         """
         # This might be scanner dependent?
         sizeX = 640
@@ -185,16 +181,51 @@ class Revopoint(object):
         # when you break the connection (which happens when we drop out of the with statement).
 
         nBytes = (npix*4+10)*nImages    # There is a small amount of data between frames, thus the extra 10 bytes.
-        resp = b''
-        with requests.get(f"{self._zx_media()}camera_id=22&type_id=20", stream = True) as r:
-            for chunk in r.iter_content(chunk_size = 1024):
-                resp += chunk
-                if (len(resp) > nBytes):
-                    break
+        if color:
+            # While waiting for the color camera we only keep the most recent
+            # data, which may start part way through a frame, so allow one more.
+            nBytes += npix*4+10
+            colorState = {"jpegs" : [], "ready" : False, "error" : None}
+            stopColor = threading.Event()
+            colorThread = threading.Thread(target = self._collect_color,
+                                           args = (stopColor, colorState, settle),
+                                           daemon = True)
+        resp = bytearray()
+        try:
+            with requests.get(f"{self._zx_media()}camera_id=22&type_id=20", stream = True) as r:
+
+                # The color stream only works once the depth engine is running.
+                if color:
+                    colorThread.start()
+                    t0 = time.time()
+
+                for chunk in r.iter_content(chunk_size = 1024):
+                    resp += chunk
+                    if (len(resp) > nBytes):
+                        if not color or colorState["ready"] or ((time.time() - t0) > 20):
+                            break
+                        if (len(resp) > 2*nBytes):
+                            del resp[:len(resp) - nBytes]
+        finally:
+            if color:
+                stopColor.set()
+                for _ in range(2):
+                    try:
+                        self.close_streams()
+                    except Exception:
+                        pass
+                if colorThread.is_alive():
+                    colorThread.join(timeout = 5)
 
         # Split resp byte stream into depth and 'other' images.
         images = {"depth" : [],
                   "other" : []}
+        if color:
+            if colorState["error"] is not None:
+                raise RuntimeError(f"Color capture failed: {colorState['error']}")
+            if (len(colorState["jpegs"]) == 0):
+                raise RuntimeError("No color frames were received")
+            images["color"] = [self._decode_jpeg(f) for f in list(colorState["jpegs"])]
 
         o = 0
         sCode = [3,7,2,1]
@@ -273,6 +304,46 @@ class Revopoint(object):
         self._set_register("0x912", 0)              # manual exposure
         self._set_register("0x911", int(exposure))
 
+    def _brightness(self, jpeg):
+        """
+        Mean brightness of a JPEG frame, decoded at 1/8 size for speed.
+        """
+        import cv2
+        im = cv2.imdecode(np.frombuffer(jpeg, dtype = np.uint8), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+        return 0.0 if im is None else float(im.mean())
+
+    def _collect_color(self, stopEvent, state, settle):
+        """
+        Read the color stream (meant to run in a background thread while a depth
+        stream runs). The frames from after the auto-exposure settled go in
+        state["jpegs"], state["ready"] is set once the first of these arrives.
+        """
+        jpegs = self._iter_color_http(timeout = 15)
+        try:
+            state["jpegs"] = self._take_color(jpegs, 1, settle)
+            state["ready"] = True
+            for jpeg in jpegs:
+                if stopEvent.is_set():
+                    break
+                state["jpegs"].append(jpeg)
+        except Exception as e:
+            # Closing the streams at the end can also end up here, that's fine.
+            if not stopEvent.is_set():
+                state["error"] = e
+                state["ready"] = True
+        finally:
+            jpegs.close()
+
+    def _decode_jpeg(self, jpeg):
+        """
+        Decode a JPEG frame to an RGB array.
+        """
+        import cv2
+        im = cv2.imdecode(np.frombuffer(jpeg, dtype = np.uint8), cv2.IMREAD_COLOR)
+        if im is None:
+            raise RuntimeError("Could not decode a color frame")
+        return cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+
     def _find_color_device(self):
         """
         Find the USB color-camera V4L2 node by name. The color UVC function
@@ -295,11 +366,94 @@ class Revopoint(object):
                                "Is the scanner connected over USB? You can also pass device= explicitly.")
         return f"/dev/video{best}"
 
+    def _is_settled(self, means):
+        """
+        True once the color auto-exposure has settled, given the brightness of
+        each frame so far. The frames are ~0.25 seconds apart. Once settled the
+        brightness varies by up to ~3% over 3 frames (the projector), while it
+        is still ramping up after power on the change is 7% or more.
+        """
+        return (len(means) > 3) and (abs(means[-1] - means[-4]) <= 0.05*max(means[-4], 1.0))
+
+    def _iter_color_http(self, timeout = 10):
+        """
+        Yield JPEG frames from the color stream (zx_media.cgi, camera_id=50).
+
+        Each frame is an 8 byte header, magic 0x11223344 and the payload length
+        (both little-endian uint32), followed by the JPEG. The stream can start
+        with a stale header left over from an earlier stream, so a header only
+        counts if a JPEG follows it, otherwise we look for the next one.
+        """
+        magic = struct.pack("<I", 0x11223344)
+        buf = bytearray()
+        try:
+            with requests.get(f"{self._zx_media()}camera_id=50", stream = True, timeout = timeout) as r:
+                if (r.status_code != requests.codes.ok):
+                    raise RuntimeError(f"Color stream failed with code {r.status_code}")
+                for chunk in r.iter_content(chunk_size = 65536):
+                    buf += chunk
+                    while True:
+                        o = buf.find(magic)
+                        if (o == -1):
+                            del buf[:max(0, len(buf) - 3)]     # keep a possible partial magic
+                            break
+                        if (len(buf) < (o + 10)):
+                            del buf[:o]
+                            break
+                        if (buf[o+8:o+10] != b"\xff\xd8"):
+                            del buf[:o+4]                       # stale header
+                            continue
+                        size = struct.unpack_from("<I", buf, o + 4)[0]
+                        if (len(buf) < (o + 8 + size)):
+                            del buf[:o]
+                            break
+                        jpeg = bytes(buf[o+8:o+8+size])
+                        del buf[:o+8+size]
+
+                        # The payload has a few bytes of padding after the
+                        # end-of-image marker.
+                        end = jpeg.rfind(b"\xff\xd9")
+                        yield jpeg[:end + 2] if end != -1 else jpeg
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError("No color frames (is the depth engine running?)") from e
+
+    def _iter_color_usb(self, device):
+        """
+        Yield JPEG frames from the USB color camera (V4L2 through OpenCV).
+        """
+        import cv2
+
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open color camera {device}")
+        try:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 800)
+
+            # With CONVERT_RGB off the V4L2 backend hands back the raw MJPEG
+            # buffer instead of a decoded BGR image.
+            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+
+            while True:
+                (ok, frame) = cap.read()
+                if not ok:
+                    raise RuntimeError(f"Failed to read a frame from {device} "
+                                       "(is the depth engine running?)")
+
+                # The mmap buffer is larger than the JPEG, so trim the trailing
+                # padding back to the end-of-image marker.
+                raw = frame.tobytes()
+                end = raw.rfind(b"\xff\xd9")
+                yield raw[:end + 2] if end != -1 else raw
+        finally:
+            cap.release()
+
     def _run_engine(self, stopEvent):
         """
         Start a depth stream and hold it open (meant to run in a background
-        thread) so the shared camera subsystem is powered -- required for USB
-        color capture. The projector runs while this is active. The stream is
+        thread) so the camera subsystem is running -- required for color
+        capture. The projector runs while this is active. The stream is
         closed when 'stopEvent' is set; the caller must also call close_streams()
         to be sure the engine is stopped on the scanner side.
         """
@@ -325,6 +479,32 @@ class Revopoint(object):
         words = ["echo", "s", str(reg)] + [str(v) for v in values] + [">", "/dev/rk_preisp"]
         query = "system_cmd=" + "%20".join(words)
         return self.check_response(requests.get(f"{self._zx_cmd()}{query}"))
+
+    def _take_color(self, jpegs, n, settle, timeout = 10.0):
+        """
+        Take n frames from an iterator of JPEG frames, first discarding frames
+        while the color auto-exposure settles (see get_color_image()).
+        """
+        frames = []
+        means = []
+        t0 = time.time()
+        for jpeg in jpegs:
+            if settle is True:
+                means.append(self._brightness(jpeg))
+                if self._is_settled(means):
+                    settle = 0
+                elif ((time.time() - t0) > timeout):
+                    print(f"Color auto-exposure did not settle in {timeout} seconds, using the frames anyway")
+                    settle = 0
+                else:
+                    continue
+            elif settle:
+                settle -= 1
+                continue
+            frames.append(jpeg)
+            if (len(frames) == n):
+                return frames
+        raise RuntimeError(f"Only got {len(frames)} of {n} color frames")
 
     def _zx_cmd(self):
         """
@@ -363,11 +543,10 @@ if(__name__ == "__main__"):
         for i in range(nm):
             tf.write(images["other"][i])
 
-    # Grab a color frame from the USB camera and save it. The scanner must be
-    # plugged in over USB (for the frames) AND reachable over WiFi -- the color
-    # sensor only streams while a depth stream runs, so get_color_image briefly
-    # starts the engine (projector on) and tears it down. raw_jpeg returns the
-    # camera's MJPEG bytes, so this writes a '.jpg' with no re-encode.
+    # Grab a color frame over WiFi and save it. The color camera only streams
+    # while a depth stream runs, so get_color_image briefly starts the engine
+    # (projector on) and tears it down. raw_jpeg returns the camera's JPEG
+    # bytes, so this writes a '.jpg' with no re-encode.
     jpg = rp.get_color_image(n = 1, raw_jpeg = True)[0]
     with open("color.jpg", "wb") as fp:
         fp.write(jpg)

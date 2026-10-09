@@ -13,6 +13,10 @@ separate path from the WiFi/HTTP control plane and exposes different things.
 - The same VID:PID + extension-unit GUID is shared by the POP3 Plus and POP4
   *(from other scanners)*, so those projects' USB notes are a useful reference.
 - 5 interfaces: two UVC functions (depth, color) + a HID interface.
+- Power comes over the same USB cable. On a supply that could not carry the
+  load, starting the projector made the scanner reboot repeatedly (the firmware
+  also restarts the scanner if a camera stops delivering frames). A supply rated
+  for more current fixed it.
 
 ## Depth function → `/dev/video2` (`DepthCamA22C...`)
 
@@ -44,11 +48,11 @@ Mode names reported over the HTTP API (`get_depth_reso`) line up with these:
   powered while a depth stream runs. `Revopoint.get_color_image()` handles this
   by starting a short depth stream, grabbing the color frames, and always
   tearing the stream down.
-- **The color frames come over USB only.** Color is *not* exposed anywhere on the
-  WiFi/HTTP interface (which only carries the `mipi` depth path), so an
-  HTTP-only client can never get color. Because of the engine dependency above,
-  color capture needs the scanner plugged in over USB (for the frames) *and*
-  reachable over WiFi (to run the engine).
+- **The same color frames are also served over WiFi** (`zx_media.cgi`,
+  `camera_id=50`, see [http-api.md](http-api.md)). That also needs the depth
+  engine running, but no USB connection. Over USB, color capture needs the
+  scanner plugged in (for the frames) *and* reachable over WiFi (to run the
+  engine).
 - The projector is lit during a color capture. At the color camera's auto
   exposure the fringe is largely averaged out, but it is not a projector-off
   texture image.
@@ -71,9 +75,9 @@ Mode names reported over the HTTP API (`get_depth_reso`) line up with these:
   you cannot drive exposure or the projector without reverse-engineering the
   extension unit. The **HTTP path is the easier control plane** (see
   [http-api.md](http-api.md) and
-  [rk-preisp-registers.md](rk-preisp-registers.md)). USB is the only way to get
-  **color**, and possibly higher-rate depth, in both cases with the engine
-  started over HTTP.
+  [rk-preisp-registers.md](rk-preisp-registers.md)). USB is a second way to get
+  color (it is also served over HTTP), and possibly higher-rate depth, in both
+  cases with the engine started over HTTP.
 
 ## HID interface
 

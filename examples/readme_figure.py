@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
-Capture a depth image and the matching USB color camera image from a Revopoint
-scanner and save them side by side. This is how images/image.png in the README
-was made.
+Capture a depth image and the matching color camera image from a Revopoint
+scanner and save them one above the other. This is how images/image.png in the
+README was made.
 
-The scanner must be on WiFi (for depth) and plugged in over USB (for color).
+Everything comes over WiFi, the scanner only needs USB for power.
 
 Usage (from the repository root):
     python examples/readme_figure.py --ip 192.168.1.14
@@ -25,8 +25,8 @@ import revopoint_python.revopoint as rppy
 
 def capture(ipAddr, exposure, nImages):
     """
-    Returns (depth, color): the densest of nImages depth frames and one RGB
-    frame from the USB color camera.
+    Returns (depth, color): the densest of nImages depth frames and an RGB
+    frame from the color camera, captured at the same time.
     """
     rp = rppy.Revopoint(ipAddr = ipAddr)
     rp.close_streams()
@@ -34,9 +34,7 @@ def capture(ipAddr, exposure, nImages):
         rp.config_MINI()
         rp.set_depth_gain(1)
         rp.set_exposure(exposure)
-        images = rp.get_images(nImages)
-        rp.close_streams()
-        color = rp.get_color_image(1)[0]
+        images = rp.get_images(nImages, color = True)
     finally:
         rp.set_auto_exposure(True)
         rp.close_streams()
@@ -47,6 +45,7 @@ def capture(ipAddr, exposure, nImages):
     # The scanner cycles through several exposure states, so some frames are
     # sparse. Keep the one with the most valid (non-zero) pixels.
     depth = max(images["depth"], key = np.count_nonzero)
+    color = images["color"][-1]
     return depth, color
 
 
@@ -63,7 +62,7 @@ def make_figure(depth, color, fname):
     cax = fig.add_subplot(gs[1, 1])
 
     ax1.imshow(color)
-    ax1.set_title("USB color camera")
+    ax1.set_title("Color camera")
 
     valid = depth[depth > 0]
     [vmin, vmax] = np.percentile(valid, [1, 99])
