@@ -117,25 +117,57 @@ valid-pixel fraction over the full 640x400 frame):
 - Too long → the bright/near object **saturates**, and saturated pixels become
   **holes** in the depth map (no pattern to match).
 - Too short → the whole scene is too dark to match → depth collapses.
-- No single exposure covers this HDR scene well; the sweet spot here was ~12000.
+- No single exposure covers this high-dynamic-range scene well; the sweet spot
+  here was ~12000.
 - This is why the out-of-the-box experience is poor: the default long/auto
   exposure blows out bright surfaces and drops them from the scan.
 
-## The HDR capture cycle (period-4)
+## Dim-projector frames at lower exposure
 
-At exposures around 8000–10000 the per-frame depth coverage was **not** constant
-— it followed a repeating period-4 pattern, e.g.:
+At exposures up to ~10000 the per-frame depth coverage is **not** constant: some
+frames give good depth and some almost none, in pairs. At 12000 and above every
+frame is good. Per-frame depth coverage on the bust scene:
 
 ```
-[0.225, 0.226, 0.018, 0.013,  0.225, 0.226, 0.018, 0.013, ...]
+ 8000 (2026-10-08): 0.225 0.225 0.020 0.017 0.224 0.225 0.020 0.017 ...
+ 8000 (2026-10-09): 0.175 0.175 0.004 0.003 0.175 0.175 0.004 0.002 0.175 0.175 0.005 0.002
+ 8000 (2026-10-09): 0.175 0.175 0.004 0.003 0.175 0.175 0.175 0.175 0.005 0.002 0.175 0.175
+12000 (2026-10-09): 0.176 on every frame
 ```
 
-Two of every four frames give good depth, two give almost none. The scanner
-cycles through ~4 capture states (consistent with **HDR exposure bracketing**);
-at a low base exposure, two of the states fall below the depth threshold. At
-exposure ≥12000 all four states yield depth. Any consumer of the raw stream
-should expect this interleave and select/fuse accordingly rather than trusting
-every Nth frame.
+The cadence is not fixed: usually 2 good / 2 bad, but one run went 2 good,
+2 bad, 4 good, 2 bad, 2 good.
+
+**It is the projector, not the camera exposure** (measured 2026-10-09 from the
+mono planes, exposure fixed at 8000 in manual mode). On a bad frame the
+projector-lit pixels are about half as bright, while pixels lit only by ambient
+light do not change:
+
+| pixel brightness on a good frame | 12000 vs 8000 (1.5× exposure) | bad vs good frame at 8000 |
+|---|---:|---:|
+| darkest (ambient only) | 1.18× | 1.00× |
+| mid | 1.35–1.42× | 0.70–0.63× |
+| bright (projector-lit) | 1.53× | 0.52× |
+
+The 12000 column shows the darkest pixels do respond to exposure, so a shorter
+exposure would have dimmed them too. Instead about half of the projector light
+is missing on the bad frames, which at 8000 drops the fringe below what the
+depth decoder needs. At 12000 the projector brightness was the same on every
+frame.
+
+What causes it is not known. The SDK's HDR mode (`0x914`) and multi-frame
+fusion (`0xa04`) settings were both set to 0 with no change, see
+[rk-preisp-registers.md](rk-preisp-registers.md). Possibilities are an automatic
+projector-brightness control, a laser power or thermal limit, or a timing
+interaction between the camera exposure and the projector that a long enough
+exposure covers. Any consumer of the raw stream should check each frame rather
+than trusting every frame, or use an exposure high enough that it doesn't happen.
+
+The mono planes also come in **byte-identical pairs** (frames 0/1, 2/3, ...)
+while each depth frame is different, so the mono images update at about half
+the depth rate. The SDK's fringe-pattern list includes modes that output two
+depth frames per pattern cycle (`0xa05`, `..._MULTI_DEPTH`), which may be what
+the MINI runs; not checked.
 
 ## Frame rate is capped at ~4 fps (acquisition-limited, not bandwidth)
 
@@ -194,7 +226,7 @@ scalar — see [references.md](references.md) for where the calibration files li
 - **Hardware is good.** Clean fringe, clean stereo, and a smooth, nearly
   complete single-frame depth surface of the object once exposure is right.
 - **The poor results are mostly software/workflow:** exposure control, handling
-  the HDR cycle, and multi-frame fusion. These are all addressable in host code.
+  the dim-projector frames, and multi-frame fusion. These are all addressable in host code.
 - **There is a hardware floor.** Independent tests of this sensor class land
   around ~0.15 mm noise/resolution, and no third-party pipeline is known to beat
   Revo Scan's own fusion on a MINI. Better-than-stock is very achievable;

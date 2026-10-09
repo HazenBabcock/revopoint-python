@@ -42,8 +42,9 @@ def capture(ipAddr, exposure, nImages):
     if (len(images["depth"]) == 0):
         raise RuntimeError("No depth frames were received.")
 
-    # The scanner cycles through several exposure states, so some frames are
-    # sparse. Keep the one with the most valid (non-zero) pixels.
+    # At lower exposures some depth frames come out nearly empty (the projector
+    # is dimmer on those frames). Keep the one with the most valid (non-zero)
+    # pixels.
     depth = max(images["depth"], key = np.count_nonzero)
     color = images["color"][-1]
     return depth, color

@@ -41,9 +41,9 @@ rp.set_exposure(12000)
 
 # acquire eight depth images and the color camera images at the same time,
 # this returns a dictionary with the depth images, the images from the depth
-# cameras and the color images. The scanner cycles through several exposure
-# states so some depth frames are sparse, keep the one with the most valid
-# pixels.
+# cameras and the color images. At lower exposures some depth frames come out
+# nearly empty (the projector is dimmer on those frames), so keep the one with
+# the most valid pixels.
 images = rp.get_images(8, color = True)
 depth = max(images["depth"], key = numpy.count_nonzero)
 color = images["color"][-1]

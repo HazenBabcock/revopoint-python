@@ -28,7 +28,10 @@ corresponding get.
 | `0x910` | frame time | not tried | (POP3) |
 | `0x911` | **exposure** | ✅ verified | mono brightness tracked it directly (median 79→4 as 60000→1500); the real image-quality lever |
 | `0x912` | auto-exposure mode (0 = manual, 1 = auto) | ✅ verified | had to set `0x912 0` for manual `0x911` to hold; restored to `1` after testing |
+| `0x914` | HDR mode (SDK: 0 off, 1 high-reflect, 2 low-reflect, 3 composite) | accepted | writing 0 did not change the dim-projector frames; default value unknown |
 | `0x918` | depth-scale divisor | **unresolved** | (POP3) says divisor = 10 (0.1 mm/unit). On the MINI that gives ~2.17 m for a near object — wrong. Metric scale is NOT established; use `Q.bin` reprojection instead (see [depth-pipeline.md](depth-pipeline.md)). |
+| `0xa04` | multi-frame fusion, "dual exposure" (SDK: 0/1) | accepted | writing 0 did not change the dim-projector frames; default value unknown |
+| `0xa05` | fringe-pattern selector (SDK) | not tried | SDK modes include standard 4-frequency, 3-frequency 4-step (`0x05`), and "multi-depth" modes that output 2 depth frames per cycle (`0x06` is the "high speed mode"). The SDK stops and restarts the stream (`0x483` / `0x481`) around a change. |
 | `0xb00` | LED master enable | **inert** | (POP3). Toggling 0/1 gave byte-identical frames on the MINI |
 | `0xb01` | projector enable | **inert** | (POP3). Also byte-identical. On the MINI the projector is **always on** while streaming — see [depth-pipeline.md](depth-pipeline.md) |
 

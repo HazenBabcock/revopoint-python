@@ -81,9 +81,10 @@ reshaped `(400,640)` and `mono` as `uint8[512000]` reshaped `(800,640)`
 immediately after. (This is what `revopoint.get_images` does; the small
 `o -= 4` fudge in that code is because the magic overlaps the frame accounting.)
 
-> **Caveat:** at some exposures the stream interleaves a period-4 cycle of
-> capture states (see [depth-pipeline.md](depth-pipeline.md)); consecutive
-> frames are not all equivalent.
+> **Caveat:** at lower exposures some depth frames are nearly empty because the
+> projector is dimmer on those frames (see [depth-pipeline.md](depth-pipeline.md),
+> "Dim-projector frames at lower exposure"); consecutive frames are not all
+> equivalent.
 
 ## Color stream
 
