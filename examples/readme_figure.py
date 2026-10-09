@@ -83,7 +83,7 @@ def make_figure(depth, color, fname):
 if (__name__ == "__main__"):
     parser = argparse.ArgumentParser(description = "Capture the README depth + color figure.")
     parser.add_argument("--ip", required = True, help = "Scanner IP address.")
-    parser.add_argument("--exposure", type = int, default = 6000, help = "Depth exposure (default 6000).")
+    parser.add_argument("--exposure", type = int, default = 12000, help = "Depth exposure (default 12000).")
     parser.add_argument("--frames", type = int, default = 8, help = "Depth frames to choose from (default 8).")
     parser.add_argument("--out", default = "images/image.png", help = "Output file (default images/image.png).")
     args = parser.parse_args()
