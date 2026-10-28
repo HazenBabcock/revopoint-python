@@ -159,6 +159,10 @@ class Revopoint(object):
 
         Note: The compressed stream ('camera_id=21') does not raise the frame
               rate, it is limited by the projector, see notes/depth-pipeline.md.
+
+        Note: A new stream can begin with a frame left over from the previous
+              stream, showing the scene as it was then (e.g. before the object
+              was moved). The stream's first frame is always discarded.
         """
         # This might be scanner dependent?
         sizeX = 640
@@ -180,7 +184,9 @@ class Revopoint(object):
         # This actually starts the camera. You get the camera data back as a stream of bytes. It stops
         # when you break the connection (which happens when we drop out of the with statement).
 
-        nBytes = (npix*4+10)*nImages    # There is a small amount of data between frames, thus the extra 10 bytes.
+        # There is a small amount of data between frames, thus the extra 10 bytes. One more
+        # frame than asked for is read, as the first frame is discarded (see below).
+        nBytes = (npix*4+10)*(nImages + 1)
         if color:
             # While waiting for the color camera we only keep the most recent
             # data, which may start part way through a frame, so allow one more.
@@ -191,6 +197,7 @@ class Revopoint(object):
                                            args = (stopColor, colorState, settle),
                                            daemon = True)
         resp = bytearray()
+        trimmed = False
         try:
             with requests.get(f"{self._zx_media()}camera_id=22&type_id=20", stream = True) as r:
 
@@ -206,6 +213,7 @@ class Revopoint(object):
                             break
                         if (len(resp) > 2*nBytes):
                             del resp[:len(resp) - nBytes]
+                            trimmed = True
         finally:
             if color:
                 stopColor.set()
@@ -257,8 +265,14 @@ class Revopoint(object):
             o += 4*npix
             o -= 4       # Not sure why I need to wind this back slightly here.
 
-            if (len(images["depth"]) == nImages):
-                break
+        # The stream's first frame can be left over from the previous stream, so after
+        # the object moves it shows the old pose. Drop it, unless the start of the
+        # stream was already trimmed away above, and keep the most recent nImages.
+        if not trimmed:
+            images["depth"] = images["depth"][1:]
+            images["other"] = images["other"][1:]
+        images["depth"] = images["depth"][-nImages:]
+        images["other"] = images["other"][-nImages:]
 
         return images
 

@@ -86,6 +86,12 @@ immediately after. (This is what `revopoint.get_images` does; the small
 > "Dim-projector frames at lower exposure"); consecutive frames are not all
 > equivalent.
 
+> **Caveat:** a new depth stream can begin with a frame left over from the
+> previous stream. If the object moved in between, that frame shows it where it
+> was. Seen on a turntable scan in 2 of 40 moves: the first frame lined up with
+> the previous pose, not the current one. `revopoint.get_images` discards the
+> first frame of every stream.
+
 ## Color stream
 
 The color camera is served by `zx_media.cgi` too. These are the `camera_id`
